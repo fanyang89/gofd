@@ -145,7 +145,7 @@ var cmd = &cli.Command{
 }
 
 func main() {
-	logger, _ := zap.NewProduction(zap.AddCaller(), zap.AddCallerSkip(1))
+	logger, _ := zap.NewDevelopment(zap.AddCaller(), zap.AddCallerSkip(1))
 	zap.ReplaceGlobals(logger)
 	defer func() { _ = logger.Sync() }()
 
