@@ -11,7 +11,6 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/jotfs/fastcdc-go"
-	_ "github.com/marcboeker/go-duckdb"
 	"github.com/urfave/cli/v3"
 )
 

@@ -17,6 +17,34 @@ import (
 	"go.uber.org/zap"
 )
 
+type exclude struct {
+	patterns []glob.Glob
+}
+
+func (e exclude) Match(path string) bool {
+	if len(e.patterns) == 0 {
+		return false
+	}
+	for _, pattern := range e.patterns {
+		if pattern.Match(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func newExclude(patterns []string) *exclude {
+	p := make([]glob.Glob, len(patterns))
+	for i, pattern := range patterns {
+		g, err := glob.Compile(pattern)
+		if err != nil {
+			panic(err)
+		}
+		p[i] = g
+	}
+	return &exclude{p}
+}
+
 var cmdFind = &cli.Command{
 	Name: "find",
 	Arguments: []cli.Argument{
@@ -36,11 +64,16 @@ var cmdFind = &cli.Command{
 			Name:    "type",
 			Aliases: []string{"t"},
 		},
+		&cli.StringSliceFlag{
+			Name:    "excludes",
+			Aliases: []string{"e"},
+		},
 	},
 	Action: func(ctx context.Context, command *cli.Command) error {
 		path := command.StringArg("path")
 		action := newAction(command.String("action"))
 		searchMode := newSearchType(command.String("type"))
+		exclude := newExclude(command.StringSlice("excludes"))
 
 		globStr := command.String("glob")
 		matcher, err := glob.Compile(globStr)
@@ -80,7 +113,7 @@ var cmdFind = &cli.Command{
 			default:
 			}
 
-			if matcher.Match(path) {
+			if matcher.Match(path) && !exclude.Match(path) {
 				pathList = append(pathList, path)
 			}
 
@@ -125,6 +158,37 @@ func (DeleteAction) Execute(path string) error {
 		return err
 	}
 	return os.RemoveAll(path)
+}
+
+type CopyAction struct {
+	dst string
+}
+
+func (a CopyAction) Execute(path string) error {
+	fileName := filepath.Base(path)
+	dstPath := filepath.Join(a.dst, fileName)
+
+	zap.L().Info("Copy to", zap.String("file", fileName), zap.String("dst", a.dst))
+	_, err := os.Stat(dstPath)
+	if err == nil {
+		return errors.Newf("File already exists: %s", dstPath)
+	}
+
+	var r, d *os.File
+	r, err = os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+
+	d, err = os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+
+	_, err = io.Copy(d, r)
+	return err
 }
 
 type MoveAction struct {
@@ -180,6 +244,17 @@ func (a MoveAction) Execute(path string) error {
 	return nil
 }
 
+func createDirectory(path string) {
+	_, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			_ = os.MkdirAll(path, 0755)
+		} else {
+			panic(err)
+		}
+	}
+}
+
 func newAction(action string) Action {
 	if action == "" {
 		return OmitAction{}
@@ -188,15 +263,15 @@ func newAction(action string) Action {
 	const moveToPrefix = "move-to:"
 	if strings.HasPrefix(action, moveToPrefix) {
 		dst := strings.TrimPrefix(action, moveToPrefix)
-		_, err := os.Stat(dst)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				_ = os.MkdirAll(dst, 0755)
-			} else {
-				panic(err)
-			}
-		}
+		createDirectory(dst)
 		return MoveAction{dst: dst}
+	}
+
+	const copyToPrefix = "copy-to:"
+	if strings.HasPrefix(action, copyToPrefix) {
+		dst := strings.TrimPrefix(action, copyToPrefix)
+		createDirectory(dst)
+		return CopyAction{dst: dst}
 	}
 
 	switch action {
