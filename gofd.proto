@@ -1,0 +1,16 @@
+syntax = "proto3";
+package pb;
+option go_package = "github.com/fanyang89/gofd/pb";
+
+message FileEntry {
+  uint64 id = 1;
+  string path = 2;
+  uint64 hash = 3;
+}
+
+message FileChunkEntry {
+  uint64 file_id = 1;
+  uint64 offset = 2;
+  uint64 len = 3;
+  bytes hash = 4;
+}

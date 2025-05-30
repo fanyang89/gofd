@@ -2,14 +2,13 @@ package main
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"os"
 
 	"github.com/cespare/xxhash"
 )
 
-func getFileHash(path string) (uint64, error) {
+func xxHashFile(path string) (uint64, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, err
@@ -25,9 +24,17 @@ func getFileHash(path string) (uint64, error) {
 	return h.Sum64(), nil
 }
 
-func getBufferHash(buf []byte) string {
+func xxHashString(s string) uint64 {
+	h := xxhash.New()
+	_, err := io.WriteString(h, s)
+	if err != nil {
+		panic(err)
+	}
+	return h.Sum64()
+}
+
+func sha256ByteSlice(buf []byte) []byte {
 	h := sha256.New()
 	h.Write(buf)
-	x := h.Sum(nil)
-	return hex.EncodeToString(x)
+	return h.Sum(nil)
 }
