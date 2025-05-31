@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/pebble"
@@ -18,6 +19,21 @@ import (
 
 	"github.com/fanyang89/gofd/pb"
 )
+
+var prefixFileEntryPathToID = []byte("pi") // pi:path_hash -> file_entry_id
+var prefixFileEntryPathToIDEnd = prefixEndBytes(prefixFileEntryPathToID)
+
+var prefixFileEntry = []byte("fe") // fe:file_id -> file_entry
+var prefixFileEntryEnd = prefixEndBytes(prefixFileEntry)
+
+var prefixFileChunk = []byte("fc") // fc:file_id:offset:len -> hash
+var prefixFileChunkEnd = prefixEndBytes(prefixFileChunk)
+
+var cdcOption = fastcdc.Options{
+	MinSize:     4 * 1024,
+	AverageSize: 1 * 1024 * 1024,
+	MaxSize:     4 * 1024 * 1024,
+}
 
 var cmdDeduplicateChunk = &cli.Command{
 	Name: "chunk",
@@ -55,19 +71,18 @@ var cmdDeduplicateChunk = &cli.Command{
 }
 
 type ChunkDeduplicator struct {
-	db *pebble.DB
+	db              *pebble.DB
+	lastFileEntryID atomic.Uint64
 }
 
 func NewChunkDeduplicator(db *pebble.DB) *ChunkDeduplicator {
-	return &ChunkDeduplicator{
-		db: db,
+	cd := &ChunkDeduplicator{db: db}
+	id, err := cd.getLastFileEntryID()
+	if err != nil {
+		panic(err)
 	}
-}
-
-var cdcOption = fastcdc.Options{
-	MinSize:     4 * 1024,
-	AverageSize: 1 * 1024 * 1024,
-	MaxSize:     4 * 1024 * 1024,
+	cd.lastFileEntryID.Store(id)
+	return cd
 }
 
 func splitFileIntoChunks(r io.Reader) func(yield func(chunk *fastcdc.Chunk) bool) {
@@ -90,19 +105,27 @@ func splitFileIntoChunks(r io.Reader) func(yield func(chunk *fastcdc.Chunk) bool
 	}
 }
 
-var prefixFileEntryPathToID = []byte("pi") // pi:path_hash -> file_entry_id
-var prefixFileEntryPathToIDEnd = []byte("pj")
-var prefixFileEntry = []byte("fe") // fe:file_entry_id -> file_entry
-var prefixFileEntryEnd = []byte("ff")
-
 func newKey(prefix []byte, value string) []byte {
 	return append(prefix[:], []byte(value)...)
 }
 
-func newKeyUInt64(prefix []byte, value uint64) []byte {
-	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, value)
+func newKeyUInt64(prefix []byte, values ...uint64) []byte {
+	buf := make([]byte, len(values)*8)
+	for i := 0; i < len(values); i++ {
+		lower := i * 8
+		upper := lower + 8
+		binary.BigEndian.PutUint64(buf[lower:upper], values[i])
+	}
 	return append(prefix, buf...)
+}
+
+func (d *ChunkDeduplicator) nextFileEntryID() uint64 {
+	for {
+		old := d.lastFileEntryID.Load()
+		if d.lastFileEntryID.CompareAndSwap(old, old+1) {
+			return old + 1
+		}
+	}
 }
 
 func (d *ChunkDeduplicator) getLastFileEntryID() (uint64, error) {
@@ -134,11 +157,6 @@ func uint64ToByteSlice(value uint64) (buf []byte) {
 }
 
 func (d *ChunkDeduplicator) createFileEntry(path string) (id uint64, err error) {
-	lastID, err := d.getLastFileEntryID()
-	if err != nil {
-		return 0, err
-	}
-
 	hash, err := xxHashFile(path)
 	if err != nil {
 		return 0, err
@@ -147,7 +165,7 @@ func (d *ChunkDeduplicator) createFileEntry(path string) (id uint64, err error) 
 	pathHash := xxHashString(path)
 
 	entry := pb.FileEntry{
-		Id:   lastID + 1,
+		Id:   d.nextFileEntryID(),
 		Path: path,
 		Hash: hash,
 	}
@@ -198,8 +216,40 @@ func (d *ChunkDeduplicator) ensureFileEntryCreated(path string) (id uint64, err 
 	return
 }
 
+func prefixEndBytes(prefix []byte) []byte {
+	if len(prefix) == 0 {
+		return nil
+	}
+
+	end := make([]byte, len(prefix))
+	copy(end, prefix)
+
+	for {
+		if end[len(end)-1] != byte(255) {
+			end[len(end)-1]++
+			break
+		}
+
+		end = end[:len(end)-1]
+
+		if len(end) == 0 {
+			end = nil
+			break
+		}
+	}
+
+	return end
+}
+
 func (d *ChunkDeduplicator) ProcessFile(path string) error {
 	fileID, err := d.ensureFileEntryCreated(path)
+	if err != nil {
+		return err
+	}
+
+	start := newKeyUInt64(prefixFileChunk, fileID)
+	end := prefixEndBytes(start)
+	err = d.db.DeleteRange(start, end, pebble.NoSync)
 	if err != nil {
 		return err
 	}
@@ -212,6 +262,11 @@ func (d *ChunkDeduplicator) ProcessFile(path string) error {
 
 	for c := range splitFileIntoChunks(f) {
 		hash := sha256ByteSlice(c.Data)
+		key := newKeyUInt64(prefixFileChunk, uint64(c.Offset), uint64(c.Length))
+		err = d.db.Set(key, hash, pebble.NoSync)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
