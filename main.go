@@ -15,6 +15,7 @@ var cmd = &cli.Command{
 	Commands: []*cli.Command{
 		cmdFind,
 		cmdDeduplicate,
+		cmdTool,
 	},
 }
 

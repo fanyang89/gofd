@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"io"
 	"os"
 
@@ -33,8 +34,15 @@ func xxHashString(s string) uint64 {
 	return h.Sum64()
 }
 
-func sha256ByteSlice(buf []byte) []byte {
+func sha256ByteSlice(buf []byte) []uint64 {
 	h := sha256.New()
 	h.Write(buf)
-	return h.Sum(nil)
+	b := h.Sum(nil)
+	s := [4]uint64{}
+	for i := 0; i < len(s); i++ {
+		start := i * 8
+		end := start + 8
+		s[i] = binary.BigEndian.Uint64(b[start:end])
+	}
+	return s[:]
 }

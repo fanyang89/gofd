@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/binary"
+	"encoding/hex"
 	"io"
 	"io/fs"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"github.com/jotfs/fastcdc-go"
 	"github.com/negrel/assert"
 	"github.com/urfave/cli/v3"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/fanyang89/gofd/pb"
@@ -30,9 +33,9 @@ var prefixFileChunk = []byte("fc") // fc:file_id:offset:len -> hash
 var prefixFileChunkEnd = prefixEndBytes(prefixFileChunk)
 
 var cdcOption = fastcdc.Options{
-	MinSize:     4 * 1024,
-	AverageSize: 1 * 1024 * 1024,
-	MaxSize:     4 * 1024 * 1024,
+	MinSize:     512,
+	AverageSize: 16 * 1024,
+	MaxSize:     1024 * 1024,
 }
 
 var cmdDeduplicateChunk = &cli.Command{
@@ -58,15 +61,56 @@ var cmdDeduplicateChunk = &cli.Command{
 		defer func() { _ = db.Close() }()
 
 		cd := NewChunkDeduplicator(db)
-		return filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
+		err = filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			if d.IsDir() {
 				return nil
 			}
+			zap.L().Info("processing file", zap.String("path", path))
 			return cd.ProcessFile(path)
 		})
+		if err != nil {
+			return err
+		}
+
+		iter, err := db.NewIter(&pebble.IterOptions{
+			LowerBound: prefixFileChunk,
+			UpperBound: prefixFileChunkEnd,
+		})
+		if err != nil {
+			return err
+		}
+		defer func() { _ = iter.Close() }()
+
+		lastHash := ""
+		duplicates := make(map[string][]FileChunk)
+
+		for iter.First(); iter.Valid(); iter.Next() {
+			assert.True(bytes.HasPrefix(iter.Key(), prefixFileChunk))
+			key := iter.Key()
+			hash := hex.EncodeToString(key[2 : 2+32])
+
+			if hash != lastHash {
+				lastHash = hash
+				continue
+			}
+
+			l, ok := duplicates[hash]
+			fc := FileChunk{
+				FileID: binary.BigEndian.Uint64(key[32:40]),
+				Offset: binary.BigEndian.Uint64(key[40:48]),
+				Length: binary.BigEndian.Uint64(key[48:56]),
+			}
+			if !ok {
+				duplicates[hash] = []FileChunk{fc}
+			} else {
+				duplicates[hash] = append(l, fc)
+			}
+		}
+
+		return nil
 	},
 }
 
@@ -241,6 +285,8 @@ func prefixEndBytes(prefix []byte) []byte {
 	return end
 }
 
+var nop []byte
+
 func (d *ChunkDeduplicator) ProcessFile(path string) error {
 	fileID, err := d.ensureFileEntryCreated(path)
 	if err != nil {
@@ -262,12 +308,25 @@ func (d *ChunkDeduplicator) ProcessFile(path string) error {
 
 	for c := range splitFileIntoChunks(f) {
 		hash := sha256ByteSlice(c.Data)
-		key := newKeyUInt64(prefixFileChunk, uint64(c.Offset), uint64(c.Length))
-		err = d.db.Set(key, hash, pebble.NoSync)
+		key := newKeyUInt64(prefixFileChunk,
+			hash[0], hash[1], hash[2], hash[3],
+			fileID, uint64(c.Offset), uint64(c.Length))
+		err = d.db.Set(key, nop, pebble.NoSync)
 		if err != nil {
 			return err
 		}
 	}
 
+	err = d.db.Set(nop, nop, pebble.Sync)
+	if err != nil {
+		return err
+	}
+
 	return nil
+}
+
+type FileChunk struct {
+	FileID uint64
+	Offset uint64
+	Length uint64
 }
