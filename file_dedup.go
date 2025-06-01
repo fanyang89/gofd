@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha1"
 	"encoding/binary"
 	"errors"
@@ -9,9 +10,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/cespare/xxhash"
+	"github.com/laurent22/go-trash"
 	"github.com/opencontainers/selinux/pkg/pwalkdir"
 	"github.com/schollz/progressbar/v3"
 	"github.com/syndtr/goleveldb/leveldb"
@@ -20,7 +23,26 @@ import (
 )
 
 var cmdDeduplicateFile = &cli.Command{
-	Name: "file",
+	Name:    "file",
+	Aliases: []string{"f"},
+	Arguments: []cli.Argument{
+		&cli.StringArg{
+			Name:   "path1",
+			Config: cli.StringConfig{TrimSpace: true},
+		},
+		&cli.StringArg{
+			Name:   "path2",
+			Config: cli.StringConfig{TrimSpace: true},
+		},
+	},
+	Action: func(ctx context.Context, command *cli.Command) error {
+		path1 := command.StringArg("path1")
+		path2 := command.StringArg("path2")
+		if path1 == "" || path2 == "" {
+			return errors.New("path1 or path2 required")
+		}
+		return deduplicate(path1, path2)
+	},
 }
 
 type multiHash struct {
@@ -157,9 +179,18 @@ func deduplicate(path1 string, path2 string) error {
 		} else {
 			p := string(path)
 			zap.L().Info("Removing file", zap.String("path", p))
-			_ = os.Remove(p)
+			if trash.IsAvailable() {
+				p, err = filepath.Abs(p)
+				if err != nil {
+					panic(err)
+				}
+				_, _ = trash.MoveToTrash(p)
+			} else {
+				_ = os.Remove(p)
+			}
 		}
 	}
+
 	err = iter.Error()
 	iter.Release()
 	return err
