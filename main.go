@@ -16,6 +16,7 @@ var cmd = &cli.Command{
 		cmdFind,
 		cmdDeduplicate,
 		cmdTool,
+		cmdStat,
 	},
 }
 
