@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/gobwas/glob"
 	"github.com/laurent22/go-trash"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 )
@@ -68,12 +70,27 @@ var cmdFind = &cli.Command{
 			Name:    "excludes",
 			Aliases: []string{"e"},
 		},
+		&cli.StringFlag{
+			Name: "base-dir",
+		},
+		&cli.StringFlag{
+			Name: "dsn",
+		},
+		&cli.StringFlag{
+			Name: "sql",
+		},
 	},
 	Action: func(ctx context.Context, command *cli.Command) error {
 		path := command.StringArg("path")
 		action := newAction(command.String("action"))
 		searchMode := newSearchType(command.String("type"))
 		exclude := newExclude(command.StringSlice("excludes"))
+
+		dsn := command.String("dsn")
+		sqlStatement := command.String("sql")
+		if (dsn == "" && sqlStatement != "") || (dsn != "" && sqlStatement == "") {
+			return errors.New("dsn or sql statement both required")
+		}
 
 		globStr := command.String("glob")
 		matcher, err := glob.Compile(globStr)
@@ -83,44 +100,71 @@ var cmdFind = &cli.Command{
 
 		pathList := make([]string, 0)
 
-		err = filepath.WalkDir(path, func(path string, info os.DirEntry, err error) error {
+		if dsn != "" {
+			db, err := sql.Open("sqlite3", dsn)
 			if err != nil {
 				return err
 			}
+			defer func() { _ = db.Close() }()
 
-			switch searchMode {
-			case onlyFile:
-				if info.IsDir() {
-					return nil
-				}
-			case onlyDir:
-				if !info.IsDir() {
-					return nil
-				}
-			case onlyEmptyDir:
-				if !info.IsDir() {
-					return nil
-				}
+			rows, err := db.Query(sqlStatement)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
 
-				ents, err := os.ReadDir(path)
+			baseDir := command.String("base-dir")
+			for rows.Next() {
+				var p string
+				err = rows.Scan(&p)
 				if err != nil {
 					return err
-				} else if len(ents) >= 1 {
-					return nil
+				}
+				if baseDir != "" {
+					p = filepath.Join(baseDir, p)
+				}
+				pathList = append(pathList, p)
+			}
+		} else {
+			err = filepath.WalkDir(path, func(path string, info os.DirEntry, err error) error {
+				if err != nil {
+					return err
 				}
 
-			case fileAndDir:
-			default:
-			}
+				switch searchMode {
+				case onlyFile:
+					if info.IsDir() {
+						return nil
+					}
+				case onlyDir:
+					if !info.IsDir() {
+						return nil
+					}
+				case onlyEmptyDir:
+					if !info.IsDir() {
+						return nil
+					}
 
-			if matcher.Match(path) && !exclude.Match(path) {
-				pathList = append(pathList, path)
-			}
+					ents, err := os.ReadDir(path)
+					if err != nil {
+						return err
+					} else if len(ents) >= 1 {
+						return nil
+					}
 
-			return err
-		})
-		if err != nil {
-			return err
+				case fileAndDir:
+				default:
+				}
+
+				if matcher.Match(path) && !exclude.Match(path) {
+					pathList = append(pathList, path)
+				}
+
+				return err
+			})
+			if err != nil {
+				return err
+			}
 		}
 
 		for _, path := range pathList {
