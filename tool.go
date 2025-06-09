@@ -1,17 +1,21 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/pebble"
 	"github.com/negrel/assert"
 	"github.com/olekukonko/tablewriter"
 	"github.com/urfave/cli/v3"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/fanyang89/gofd/pb"
@@ -21,6 +25,71 @@ var cmdTool = &cli.Command{
 	Name: "tool",
 	Commands: []*cli.Command{
 		cmdToolChunkDeduplicate,
+		cmdAddUtf8Bom,
+	},
+}
+
+var cmdAddUtf8Bom = &cli.Command{
+	Name: "add-utf8-bom",
+	Arguments: []cli.Argument{
+		&cli.StringArg{Name: "path", Config: trimSpaceConfig},
+	},
+	Action: func(ctx context.Context, command *cli.Command) error {
+		path := command.StringArg("path")
+		if path == "" {
+			return errors.New("path is required")
+		}
+		path, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		dir := filepath.Dir(path)
+
+		done := false
+		w, err := os.CreateTemp(dir, filepath.Base(path))
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = w.Close()
+			if !done {
+				_ = os.Remove(w.Name())
+				return
+			}
+			if err := os.Rename(w.Name(), path); err != nil {
+				zap.L().Error("Rename failed", zap.Error(err),
+					zap.String("old", w.Name()), zap.String("new", path))
+			}
+		}()
+
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+
+		const BOM = "\xef\xbb\xbf"
+		r := bufio.NewReader(f)
+		b, err := r.Peek(len(BOM))
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(b, []byte(BOM)) {
+			return nil
+		}
+
+		_, err = w.WriteString(BOM) // BOM
+		if err != nil {
+			return err
+		}
+
+		_, err = io.Copy(w, r)
+		if err != nil {
+			return err
+		}
+
+		done = true
+		return nil
 	},
 }
 
