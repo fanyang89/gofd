@@ -348,7 +348,7 @@ func newSearchType(s string) searchType {
 	if s == "empty" {
 		return onlyEmptyDir
 	}
-	if s == "d" {
+	if s == "dir" || s == "d" {
 		return onlyDir
 	}
 	if s == "" {
