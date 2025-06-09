@@ -53,14 +53,33 @@ func mergePath(fs afero.Fs, dstPath string, srcPath string, dryRun bool) error {
 		action := MoveAction{fs: fs, dst: dstDir}
 		err = action.Execute(path)
 		if err != nil {
-			if errors.Is(err, ErrFileExists) {
-				zap.L().Info("File already exists", zap.String("src", path), zap.String("dst", dstDir))
-				return nil
+			if !errors.Is(err, ErrFileExists) {
+				return err
 			}
-			return err
+			var ok bool
+			ok, err = fileHashEqual(path, filepath.Join(dstDir, fileName))
+			if ok {
+				return os.Remove(path)
+			} else {
+				zap.L().Info("Files are not the same", zap.String("file", fileName),
+					zap.String("src", fileDir), zap.String("dst", dstDir))
+			}
 		}
 		return nil
 	})
+}
+
+func fileHashEqual(path1, path2 string) (ok bool, err error) {
+	hash1, err := xxHashFile(path1)
+	if err != nil {
+		return
+	}
+	hash2, err := xxHashFile(path2)
+	if err != nil {
+		return
+	}
+	ok = hash1 == hash2
+	return
 }
 
 var cmdMerge = &cli.Command{
