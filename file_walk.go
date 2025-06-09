@@ -216,7 +216,7 @@ func (a CopyAction) Execute(path string) error {
 	zap.L().Info("Copy to", zap.String("file", fileName), zap.String("dst", a.dst))
 	_, err := os.Stat(dstPath)
 	if err == nil {
-		return errors.Newf("File already exists: %s", dstPath)
+		return errors.Wrapf(ErrFileExists, "path: %s", dstPath)
 	}
 
 	var r, d *os.File
@@ -250,6 +250,8 @@ func IsCrossDeviceLinkErrno(errno error) bool {
 	return errors.Is(errno, syscall.EXDEV)
 }
 
+var ErrFileExists = errors.New("file exists")
+
 func (a MoveAction) Execute(path string) error {
 	fileName := filepath.Base(path)
 	dstPath := filepath.Join(a.dst, fileName)
@@ -257,7 +259,7 @@ func (a MoveAction) Execute(path string) error {
 	zap.L().Info("Move to", zap.String("file", fileName), zap.String("dst", a.dst))
 	_, err := a.fs.Stat(dstPath)
 	if err == nil {
-		return errors.Newf("File already exists: %s", dstPath)
+		return errors.Wrapf(ErrFileExists, "path: %s", dstPath)
 	}
 
 	err = a.fs.Rename(path, dstPath)

@@ -10,6 +10,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/spf13/afero"
 	"github.com/urfave/cli/v3"
+	"go.uber.org/zap"
 )
 
 var trimSpaceConfig = cli.StringConfig{TrimSpace: true}
@@ -50,7 +51,15 @@ func mergePath(fs afero.Fs, dstPath string, srcPath string, dryRun bool) error {
 		}
 
 		action := MoveAction{fs: fs, dst: dstDir}
-		return action.Execute(path)
+		err = action.Execute(path)
+		if err != nil {
+			if errors.Is(err, ErrFileExists) {
+				zap.L().Info("File already exists", zap.String("src", path), zap.String("dst", dstDir))
+				return nil
+			}
+			return err
+		}
+		return nil
 	})
 }
 
