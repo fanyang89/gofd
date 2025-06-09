@@ -6,11 +6,8 @@ tasks:
       - task: build
 
   build:
-    env:
-      CGO_ENABLED: 1
-      CGO_LDFLAGS: -L/opt/homebrew/Cellar/duckdb/1.3.0/lib
     cmds:
-      - go build -tags=duckdb_use_lib -o gofd .
+      - go build .
 
   pb:
     cmds:

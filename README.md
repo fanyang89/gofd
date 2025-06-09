@@ -2,6 +2,12 @@
 
 All in one and cross-platform cli for file management.
 
+## Compile
+
+```bash
+go build .
+```
+
 ## Usage
 
 ### Find files
