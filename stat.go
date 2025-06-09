@@ -47,7 +47,7 @@ var cmdStat = &cli.Command{
 		}
 
 		w := csv.NewWriter(writer)
-		err := w.Write([]string{"path", "size"})
+		err := w.Write([]string{"name", "size"})
 		if err != nil {
 			return err
 		}
@@ -63,7 +63,7 @@ var cmdStat = &cli.Command{
 			if err != nil {
 				return err
 			}
-			return w.Write([]string{path, fmt.Sprintf("%d", s.Size())})
+			return w.Write([]string{d.Name(), fmt.Sprintf("%d", s.Size())})
 		})
 		if err != nil {
 			return err
