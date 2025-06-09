@@ -15,6 +15,7 @@ import (
 	"github.com/gobwas/glob"
 	"github.com/laurent22/go-trash"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/spf13/afero"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 )
@@ -236,6 +237,7 @@ func (a CopyAction) Execute(path string) error {
 }
 
 type MoveAction struct {
+	fs  afero.Fs
 	dst string
 }
 
@@ -253,21 +255,21 @@ func (a MoveAction) Execute(path string) error {
 	dstPath := filepath.Join(a.dst, fileName)
 
 	zap.L().Info("Move to", zap.String("file", fileName), zap.String("dst", a.dst))
-	_, err := os.Stat(dstPath)
+	_, err := a.fs.Stat(dstPath)
 	if err == nil {
 		return errors.Newf("File already exists: %s", dstPath)
 	}
 
-	err = os.Rename(path, dstPath)
+	err = a.fs.Rename(path, dstPath)
 	if err != nil {
 		if IsCrossDeviceLinkErrno(err) {
-			var r, d *os.File
-			r, err = os.Open(path)
+			var r, d afero.File
+			r, err = a.fs.Open(path)
 			if err != nil {
 				return err
 			}
 
-			d, err = os.Create(dstPath)
+			d, err = a.fs.Create(dstPath)
 			if err != nil {
 				_ = r.Close()
 				return err
@@ -280,7 +282,7 @@ func (a MoveAction) Execute(path string) error {
 				return err
 			}
 
-			return os.Remove(path)
+			return a.fs.Remove(path)
 		} else {
 			return err
 		}
@@ -308,7 +310,7 @@ func newAction(action string) Action {
 	if strings.HasPrefix(action, moveToPrefix) {
 		dst := strings.TrimPrefix(action, moveToPrefix)
 		createDirectory(dst)
-		return MoveAction{dst: dst}
+		return MoveAction{fs: afero.NewOsFs(), dst: dst}
 	}
 
 	const copyToPrefix = "copy-to:"
