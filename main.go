@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 
+	"github.com/cockroachdb/errors"
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -18,6 +20,7 @@ var cmd = &cli.Command{
 		cmdTool,
 		cmdStat,
 		cmdMerge,
+		cmdHash,
 	},
 }
 
@@ -27,6 +30,39 @@ var cmdDeduplicate = &cli.Command{
 	Commands: []*cli.Command{
 		cmdDeduplicateFile,
 		cmdDeduplicateChunk,
+	},
+}
+
+var cmdHash = &cli.Command{
+	Name: "hash",
+	Commands: []*cli.Command{
+		cmdXXHash,
+	},
+}
+
+var cmdXXHash = &cli.Command{
+	Name:    "xxhash",
+	Aliases: []string{"xxh"},
+	Arguments: []cli.Argument{
+		&cli.StringArg{Name: "path", Config: trimSpaceConfig},
+	},
+	Action: func(ctx context.Context, command *cli.Command) error {
+		path := command.StringArg("path")
+		if path == "" {
+			return errors.New("path is required")
+		}
+
+		_, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+
+		h, err := xxHashFile(path)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("0x%x\n", h)
+		return nil
 	},
 }
 
