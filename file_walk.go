@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"fmt"
@@ -183,7 +184,61 @@ type Action interface {
 	Execute(path string) error
 }
 
+type DecompressAction struct{}
+
+func (d DecompressAction) Execute(path string) error {
+	if !strings.HasSuffix(path, ".gz") {
+		return nil
+	}
+
+	dst := strings.TrimSuffix(path, ".gz")
+	_, err := os.Stat(dst)
+	if err == nil {
+		return nil
+	}
+
+	done := false
+
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = f.Close()
+		if done {
+			if trash.IsAvailable() {
+				_, _ = trash.MoveToTrash(path)
+			} else {
+				_ = os.Remove(path)
+			}
+		}
+	}()
+
+	r, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+
+	w, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = w.Close() }()
+
+	_, err = io.Copy(w, r)
+	if err != nil {
+		return err
+	}
+
+	done = true
+	return nil
+}
+
+var _ Action = &DecompressAction{}
+
 type OmitAction struct{}
+
+var _ Action = &OmitAction{}
 
 func (OmitAction) Execute(path string) error {
 	zap.L().Info("Omitting path", zap.String("path", path))
@@ -208,6 +263,8 @@ func (DeleteAction) Execute(path string) error {
 type CopyAction struct {
 	dst string
 }
+
+var _ Action = &CopyAction{}
 
 func (a CopyAction) Execute(path string) error {
 	fileName := filepath.Base(path)
@@ -240,6 +297,8 @@ type MoveAction struct {
 	fs  afero.Fs
 	dst string
 }
+
+var _ Action = &MoveAction{}
 
 func IsCrossDeviceLinkErrno(errno error) bool {
 	if runtime.GOOS == "windows" {
@@ -327,6 +386,8 @@ func newAction(action string) Action {
 		fallthrough
 	case "delete":
 		return DeleteAction{}
+	case "gz":
+		return DecompressAction{}
 	}
 
 	panic(fmt.Errorf("unknown action: %s", action))
